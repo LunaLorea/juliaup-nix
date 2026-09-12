@@ -2,7 +2,7 @@
 
 Nix flake packaging [juliaup](https://github.com/JuliaLang/juliaup) — the official Julia version manager.
 
-Juliaup is not in nixpkgs. This flake wraps the upstream statically-linked musl binaries (Linux x86_64/aarch64, macOS x86_64/aarch64).
+Juliaup is not in nixpkgs. This flake builds juliaup from source using `rustPlatform.buildRustPackage`, making it available on any platform supported by Rust + nixpkgs.
 
 ## What this provides
 
