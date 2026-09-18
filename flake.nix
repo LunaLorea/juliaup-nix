@@ -4,53 +4,69 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    systems.url = "github:nix-systems/default";
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem
-      (system:
-        let
-          pkgs = import nixpkgs { inherit system; };
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        pkgs = import nixpkgs { inherit system; };
 
-          # ── juliaup ─────────────────────────────────────────────────────────
-          juliaup = pkgs.rustPlatform.buildRustPackage {
-            pname = "juliaup";
-            version = "1.22.3";
+        # ── juliaup ─────────────────────────────────────────────────────────
+        juliaup = pkgs.rustPlatform.buildRustPackage {
+          pname = "juliaup";
+          version = "1.22.3";
 
-            src = pkgs.fetchFromGitHub {
-              owner = "JuliaLang";
-              repo = "juliaup";
-              rev = "v1.22.3";
-              hash = "sha256-oWg5mGQpWDR9nU8b0S1XDa0CyssPfHCjZJeacvdO4RM=";
-            };
-
-            cargoHash = "sha256-AP+HG3GPHiT0prjXQT+OI4xOa4sOFi3uT3GN3lsqzz8=";
-
-            # Les tests d'installation/désinstallation écrivent dans $HOME → échouent
-            # en sandbox Nix.
-            doCheck = false;
-
-            meta = with pkgs.lib; {
-              description = "Julia version manager — installs and manages Julia versions";
-              homepage = "https://github.com/JuliaLang/juliaup";
-              license = licenses.mit;
-              mainProgram = "juliaup";
-              maintainers = [ { name = "Sébastien Celles"; email = "s.celles@gmail.com"; } ];
-            };
+          src = pkgs.fetchFromGitHub {
+            owner = "JuliaLang";
+            repo = "juliaup";
+            rev = "v1.22.3";
+            hash = "sha256-oWg5mGQpWDR9nU8b0S1XDa0CyssPfHCjZJeacvdO4RM=";
           };
 
-          # ── helper : binaire Julia officiel épinglé dans le store Nix ───────
-          # Reproduit l'approche de nixpkgs generic-bin.nix :
-          # autoPatchelf sur bin/lib/libexec, dontStrip (évite de casser les
-          # backtraces), dontAutoPatchelf (exclut share/ qui contient des images
-          # de packages Julia que patchelf casserait).
-          mkJuliaBin = { version, hashes }:
-            let mv = pkgs.lib.versions.majorMinor version;
-            in pkgs.stdenv.mkDerivation {
-              pname = "julia-bin";
-              inherit version;
+          cargoHash = "sha256-AP+HG3GPHiT0prjXQT+OI4xOa4sOFi3uT3GN3lsqzz8=";
 
-              src = {
+          # Les tests d'installation/désinstallation écrivent dans $HOME → échouent
+          # en sandbox Nix.
+          doCheck = false;
+
+          meta = with pkgs.lib; {
+            description = "Julia version manager — installs and manages Julia versions";
+            homepage = "https://github.com/JuliaLang/juliaup";
+            license = licenses.mit;
+            mainProgram = "juliaup";
+            maintainers = [
+              {
+                name = "Sébastien Celles";
+                email = "s.celles@gmail.com";
+              }
+            ];
+          };
+        };
+
+        # ── helper : binaire Julia officiel épinglé dans le store Nix ───────
+        # Reproduit l'approche de nixpkgs generic-bin.nix :
+        # autoPatchelf sur bin/lib/libexec, dontStrip (évite de casser les
+        # backtraces), dontAutoPatchelf (exclut share/ qui contient des images
+        # de packages Julia que patchelf casserait).
+        mkJuliaBin =
+          { version, hashes }:
+          let
+            mv = pkgs.lib.versions.majorMinor version;
+          in
+          pkgs.stdenv.mkDerivation {
+            pname = "julia-bin";
+            inherit version;
+
+            src =
+              {
                 "x86_64-linux" = pkgs.fetchurl {
                   url = "https://julialang-s3.julialang.org/bin/linux/x64/${mv}/julia-${version}-linux-x86_64.tar.gz";
                   hash = hashes.x86_64-linux;
@@ -67,78 +83,76 @@
                   url = "https://julialang-s3.julialang.org/bin/mac/aarch64/${mv}/julia-${version}-macaarch64.tar.gz";
                   hash = hashes.aarch64-darwin;
                 };
-              }.${system} or (throw "julia ${version} : plateforme non supportée : ${system}");
+              }
+              .${system} or (throw "julia ${version} : plateforme non supportée : ${system}");
 
-              nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                pkgs.autoPatchelfHook
-                pkgs.stdenv.cc.cc
+            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+              pkgs.autoPatchelfHook
+              pkgs.stdenv.cc.cc
+            ];
+
+            installPhase = ''
+              runHook preInstall
+              cp -r . $out
+            ''
+            + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+              autoPatchelf "$out/bin" "$out/lib" "$out/libexec"
+            ''
+            + ''
+              runHook postInstall
+            '';
+
+            dontStrip = true;
+            dontAutoPatchelf = true;
+            doCheck = false;
+
+            meta = with pkgs.lib; {
+              description = "Julia ${version} — high-performance dynamic language for technical computing";
+              homepage = "https://julialang.org";
+              license = licenses.mit;
+              mainProgram = "julia";
+              maintainers = [
+                {
+                  name = "Sébastien Celles";
+                  email = "s.celles@gmail.com";
+                }
               ];
-
-              installPhase = ''
-                runHook preInstall
-                cp -r . $out
-              '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-                autoPatchelf "$out/bin" "$out/lib" "$out/libexec"
-              '' + ''
-                runHook postInstall
-              '';
-
-              dontStrip = true;
-              dontAutoPatchelf = true;
-              doCheck = false;
-
-              meta = with pkgs.lib; {
-                description = "Julia ${version} — high-performance dynamic language for technical computing";
-                homepage = "https://julialang.org";
-                license = licenses.mit;
-                mainProgram = "julia";
-                maintainers = [ { name = "Sébastien Celles"; email = "s.celles@gmail.com"; } ];
-              };
-            };
-
-          # ── versions Julia épinglées ─────────────────────────────────────────
-          julia-1_10_9 = mkJuliaBin {
-            version = "1.10.9";
-            hashes = {
-              x86_64-linux   = "sha256-Wi0sUiRZS2g8l+cwTLckB/vPC+SgGHeJy6Gi9z8Mvwk=";
-              aarch64-linux  = "sha256-viIoguNnT5YPQ7aEL3u7UqNpl35A1dzSZJh5PhzS37Y=";
-              x86_64-darwin  = "sha256-+AyTwwoY2KXcfzfQzJR1f9OFdlEmjkqeLULTseozcvE=";
-              aarch64-darwin = "sha256-5i4AsiQIFZy6PWafLZ6LYMHSO1wtHCLsJfSVfRXKmO8=";
             };
           };
 
-          julia-1_13_0 = mkJuliaBin {
-            version = "1.13.0";
-            hashes = {
-              x86_64-linux   = "sha256-iXXaYcEopeXe0+cZ6GjajIeB3reteRPTf7mb4CqBkEs=";
-              aarch64-linux  = "sha256-bNSj5Lqi3F9VY4wo6YNfwpT0HHitpKdA3ECENneKuLQ=";
-              x86_64-darwin  = "sha256-QJ+2u/NNEGihKSpsH/qi4/JjVqmzGHzC7sLFZppVoTg=";
-              aarch64-darwin = "sha256-yFRq053p357ddLgQQGb7I74OzmCJC7Lb//rdJOc7osI=";
-            };
+        julia-1_12_0 = mkJuliaWrapper (mkJuliaBin {
+          version = "1.12.0";
+          hashes = {
+            x86_64-linux = "sha256-b4e4/PXvanNx6MedlIrt+guijORER8RG19gucPAVjag=";
           };
+        });
 
-          # ── wrappers julia ───────────────────────────────────────────────────
-          # Exec direct vers le store Nix — pas de dispatch runtime juliaup.
-          # À inclure dans home.packages (pas environment.systemPackages) pour
-          # éviter le conflit binaire avec julia-bin tiré transitivement par quarto.
-          # Les deux wrappers exposent /bin/julia → n'installez qu'un seul à la fois.
-          mkJuliaWrapper = drv: pkgs.writeShellScriptBin "julia" ''
+        # ── wrappers julia ───────────────────────────────────────────────────
+        # Exec direct vers le store Nix — pas de dispatch runtime juliaup.
+        # À inclure dans home.packages (pas environment.systemPackages) pour
+        # éviter le conflit binaire avec julia-bin tiré transitivement par quarto.
+        # Les deux wrappers exposent /bin/julia → n'installez qu'un seul à la fois.
+        mkJuliaWrapper =
+          drv:
+          pkgs.writeShellScriptBin "julia" ''
             exec ${drv}/bin/julia "$@"
           '';
+      in
+      {
+        packages = {
+          default = juliaup;
+          inherit juliaup;
+          # binaires bruts (pas de /bin/julia dans PATH)
+          inherit julia-1_12_0;
+        };
 
-          julia     = mkJuliaWrapper julia-1_13_0; # stable
-          julia-lts = mkJuliaWrapper julia-1_10_9; # LTS
-
-        in {
-          packages = {
-            default = juliaup;
-            inherit juliaup;
-            # binaires bruts (pas de /bin/julia dans PATH)
-            inherit julia-1_10_9 julia-1_13_0;
-            # wrappers /bin/julia — choisissez-en un seul dans home.packages
-            inherit julia julia-lts;
+        devShells =
+          let
+            pkgs = nixpkgs.legacyPackages.${system};
+          in
+          {
+            default = pkgs.callPackage ./shell.nix { inherit juliaup julia-1_12_0 pkgs; };
           };
-
-          apps.default = flake-utils.lib.mkApp { drv = juliaup; };
-        });
+      }
+    );
 }
